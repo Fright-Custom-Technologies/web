@@ -3,14 +3,14 @@ branches:
     - master
     - develop
 
-image: Visual Studio 2019
+image: Visual Studio 2022
 
 version: 0.0.0.{build}
 configuration: Release
 
 environment:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
-  NUGET_XMLDOC_MODE: skip
+  NUGET_XMLDOC_MODE: none
   GITHUB_ACCESS_TOKEN:
     secure: BuuXJ8z8dMoeeMPy4l7QbbNPFn1/CW9PRGZxMhH3IAFdtTftFKZHA7eqpBqiE2T3
 
@@ -20,11 +20,14 @@ init:
   - git config --global user.name "WiX-BoT"
 
 build_script:
-  - appveyor.cmd
+  - src\restore.cmd
+  - src\build.cmd release
 
 artifacts:
   - path: build\deploy
     name: deploy-artifacts
+  - path: build\logs
+    name: log-artifacts
 
 deploy:
   - provider: WebDeploy

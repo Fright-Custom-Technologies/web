@@ -6,6 +6,7 @@ namespace WixBuildTools.XsdToMarkdown
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.Linq;
+    using System.Xml;
     using System.Xml.Linq;
 
     [DebuggerDisplay("SchemaName={SchemaName,nq} TargetNamespace={TargetNamespace,nq}")]
@@ -34,19 +35,31 @@ namespace WixBuildTools.XsdToMarkdown
         private static readonly XName DeprecatedElement = XmlSchemaExtensionNamespace + "deprecated";
 
         public XDocument Document { get; private set; }
+
+        public string Path { get; }
+
         public bool IsMainSchema { get; private set; }
+
         public string TargetNamespace { get; private set; }
+
         public string SchemaName { get; private set; }
+
         public string SchemaDocumentation { get; private set; }
+
         public IDictionary<string, Element> Elements { get; }
+
         public IEnumerable<Element> RootElements { get; }
+
         public IDictionary<string, IEnumerable<Attribute>> AttributeGroups { get; private set; }
+
         public IDictionary<string, Attribute> RootAttributes { get; private set; }
+
         public IDictionary<string, SimpleType> SimpleTypes { get; }
 
-        public Xsd(XDocument xsd)
+        public Xsd(XDocument xsd, string path)
         {
             this.Document = xsd;
+            this.Path = path;
             this.IsMainSchema = xsd.Root.Element(AnnotationElement)?.Element(AppInfoElement)?.Element(MainElement) != null;
             this.TargetNamespace = xsd.Root.Attribute("targetNamespace").Value;
             this.SchemaName = GetSchemaNameFromNamespace(this.TargetNamespace);
@@ -82,7 +95,7 @@ namespace WixBuildTools.XsdToMarkdown
             var doc = GetDocumentationFromAnnotation(xSimpleType.Element(AnnotationElement));
             var enumValues = CreateEmuerationValues(xSimpleType);
 
-            return new SimpleType(name, doc, enumValues);
+            return new SimpleType(name, doc, enumValues, xSimpleType);
         }
 
         private static IEnumerable<EnumValue> CreateEmuerationValues(XElement xSimpleType)
@@ -110,15 +123,13 @@ namespace WixBuildTools.XsdToMarkdown
 
             var children = xComplexType?.Descendants(ElementElement).Select(x => this.CreateChild(x));
 
-            var xRemarks = xAppInfo?.Element(RemarksElement);
-
-            var remarks = ParseInnerText(xRemarks);
+            var remarks = xAppInfo?.Element(RemarksElement).GetRichText();
 
             var attributes = this.CreateAttributes(xComplexType);
 
             var seeAlsos = xAppInfo?.Elements(SeeAlsoElement).SelectMany(x => this.CreateSeeAlsoElement(x));
 
-            return new Element(name, this.TargetNamespace, documentation, remarks, attributes, parents, children, msiRefs, seeAlsos);
+            return new Element(name, this.TargetNamespace, documentation, remarks, attributes, parents, children, msiRefs, seeAlsos, xElement);
         }
 
         private IEnumerable<Element> CreateSeeAlsoElement(XElement xSeeAlso)
@@ -131,7 +142,7 @@ namespace WixBuildTools.XsdToMarkdown
 
         private IEnumerable<Attribute> CreateAttributes(XElement xComplexType)
         {
-            if (xComplexType != null)
+            if (xComplexType is not null)
             {
                 var attributeGroupReferences = xComplexType.Elements(AttributeGroupElement).Select(x => x.Attribute("ref")?.Value);
                 var attributeGroupAttributes = attributeGroupReferences.SelectMany(a => this.AttributeGroups[a]);
@@ -211,7 +222,7 @@ namespace WixBuildTools.XsdToMarkdown
         {
             var name = xAttribute.Attribute("name")?.Value;
             var required = String.Equals(xAttribute.Attribute("use")?.Value, "required", StringComparison.OrdinalIgnoreCase);
-            var type = this.GetAttributeType(xAttribute);
+            var type = GetAttributeType(xAttribute);
             var typeDocumentation = String.Empty;
 
             IEnumerable<EnumValue> enumValues = null;
@@ -234,7 +245,7 @@ namespace WixBuildTools.XsdToMarkdown
             var xParents = xAppInfo?.Elements(ParentElement);
             var parents = xParents?.Select(x => CreateParent(x));
 
-            return new Attribute(name, documentation, type, typeDocumentation, required, enumValues, parents);
+            return new Attribute(name, this.TargetNamespace, documentation, type, typeDocumentation, required, enumValues, parents);
         }
 
         private static string Capitalize(string value)
@@ -249,17 +260,12 @@ namespace WixBuildTools.XsdToMarkdown
 
         private static string GetDocumentationFromAnnotation(XElement xAnnotation, string prefix = null)
         {
-            // TODO: handle embedded HTML
-            var doc = xAnnotation?.Element(DocumentationElement)?.Value ?? String.Empty;
-
-            // Join split lines else Markdown tables go crazy.
-            var lines = doc.Split('\n');
-            doc = String.Join(" ", lines.Select(line => line.Trim())).Trim();
+            var doc = xAnnotation?.Element(DocumentationElement)?.GetRichText() ?? String.Empty;
 
             return String.IsNullOrWhiteSpace(doc) ? String.Empty : (prefix ?? String.Empty) + doc;
         }
 
-        private string GetAttributeType(XElement xAttribute)
+        private static string GetAttributeType(XElement xAttribute)
         {
             var type = xAttribute.Attribute("type")?.Value;
             return type switch
@@ -288,91 +294,6 @@ namespace WixBuildTools.XsdToMarkdown
 
             return deprecation;
         }
-
-        private static string ParseInnerText(XElement element)
-        {
-            if (element == null)
-            {
-                return null;
-            }
-
-            using var reader = element.CreateReader();
-
-            reader.MoveToContent();
-            var content = reader.ReadInnerXml();
-
-            if (String.IsNullOrEmpty(content))
-            {
-                return content;
-            }
-
-            content = TrimConsistentLeadingWhitespaceOnLines(content);
-
-            content = content.Replace(" xmlns:html=\"http://www.w3.org/1999/xhtml\"", String.Empty);
-
-            content = content.Replace("html:", String.Empty);
-
-            return content;
-        }
-
-        private static string TrimConsistentLeadingWhitespaceOnLines(string content)
-        {
-            // Chop off a leading line ending, if present.
-            //
-            var lineEnding = "\r\n";
-            if (content.StartsWith("\r\n", StringComparison.Ordinal))
-            {
-                content = content.Substring(2);
-            }
-            else if (content.StartsWith("\r", StringComparison.Ordinal) || content.StartsWith("\n", StringComparison.Ordinal))
-            {
-                lineEnding = content.Substring(0, 1);
-                content = content.Substring(1);
-            }
-
-            // Count leading spaces of first line.
-            //
-            var leadingCount = 0;
-            for (; leadingCount < content.Length && content[leadingCount] == ' '; ++leadingCount)
-            {
-            }
-
-            // If there are leading spaces, trim them from each line.
-            //
-            if (leadingCount > 0)
-            {
-                var leadingSpaces = new string(' ', leadingCount);
-                var lines = content.Split(lineEnding);
-
-                var allLeading = true;
-
-                // First verify that all lines start with the expected
-                // amount of leading spaces.
-                //
-                foreach (var line in lines)
-                {
-                    if (!String.IsNullOrWhiteSpace(line) && !line.StartsWith(leadingSpaces, StringComparison.Ordinal))
-                    {
-                        allLeading = false;
-                        break;
-                    }
-                }
-
-                // If all the lines have the expected count of leading spaces, trim them.
-                //
-                if (allLeading)
-                {
-                    for (var i = 0; i < lines.Length; ++i)
-                    {
-                        lines[i] = String.IsNullOrWhiteSpace(lines[i]) ? String.Empty : lines[i].Substring(leadingCount);
-                    }
-                }
-
-                content = String.Join(lineEnding, lines);
-            }
-
-            return content;
-        }
     }
 
     [DebuggerDisplay("Name={Name,nq}")]
@@ -387,6 +308,7 @@ namespace WixBuildTools.XsdToMarkdown
         public IDictionary<string, Child> Children { get; }
         public IDictionary<string, Attribute> Attributes { get; set; }
         public IEnumerable<Element> SeeAlsos { get; set; }
+        public int? LineNumber { get; }
 
         public Element(string name, string @namespace)
         {
@@ -394,7 +316,7 @@ namespace WixBuildTools.XsdToMarkdown
             this.Namespace = @namespace;
         }
 
-        public Element(string name, string @namespace, string documentation, string remarks, IEnumerable<Attribute> attributes, IEnumerable<Parent> parents, IEnumerable<Child> children, IEnumerable<MsiRef> msiRefs, IEnumerable<Element> seeAlsos)
+        public Element(string name, string @namespace, string documentation, string remarks, IEnumerable<Attribute> attributes, IEnumerable<Parent> parents, IEnumerable<Child> children, IEnumerable<MsiRef> msiRefs, IEnumerable<Element> seeAlsos, IXmlLineInfo lineInfo)
         {
             this.Name = name;
             this.Namespace = @namespace;
@@ -405,6 +327,7 @@ namespace WixBuildTools.XsdToMarkdown
             this.Children = children?.ToDictionary(x => x.Name) ?? new Dictionary<string, Child>();
             this.MsiRefs = msiRefs;
             this.SeeAlsos = seeAlsos;
+            this.LineNumber = lineInfo?.LineNumber;
         }
     }
 
@@ -412,6 +335,7 @@ namespace WixBuildTools.XsdToMarkdown
     public class Attribute
     {
         public string Name { get; }
+        public string Namespace { get; }
         public string Description { get; }
         public string Type { get; }
         public string TypeDocumentation { get; }
@@ -419,9 +343,10 @@ namespace WixBuildTools.XsdToMarkdown
         public IEnumerable<EnumValue> EnumValues { get; set; }
         public IEnumerable<Parent> Parents { get; set; }
 
-        public Attribute(string name, string description, string type, string typeDocumentation, bool required, IEnumerable<EnumValue> enumValues, IEnumerable<Parent> parents)
+        public Attribute(string name, string namespac, string description, string type, string typeDocumentation, bool required, IEnumerable<EnumValue> enumValues, IEnumerable<Parent> parents)
         {
             this.Name = name;
+            this.Namespace = namespac;
             this.Description = description;
             this.Type = type;
             this.TypeDocumentation = typeDocumentation;
@@ -437,12 +362,14 @@ namespace WixBuildTools.XsdToMarkdown
         public string Name { get; }
         public string Documentation { get; }
         public IEnumerable<EnumValue> EnumValues { get; }
+        public int? LineNumber { get; }
 
-        public SimpleType(string name, string documentation, IEnumerable<EnumValue> enumValues)
+        public SimpleType(string name, string documentation, IEnumerable<EnumValue> enumValues, IXmlLineInfo lineInfo)
         {
             this.Name = name;
             this.Documentation = documentation;
             this.EnumValues = enumValues;
+            this.LineNumber = lineInfo?.LineNumber;
         }
     }
 

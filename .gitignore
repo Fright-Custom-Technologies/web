@@ -1,11 +1,13 @@
 .vs/
 bin/
 obj/
-packages/
 build/
-
-site.lastrun
-src/Web/wwwroot/
 
 *.suo
 *.user
+launchSettings.json
+msbuild.binlog
+
+src/Docusaurus/docs/reference/schema
+src/Docusaurus/docs/reference/api
+

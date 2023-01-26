@@ -56,25 +56,57 @@ namespace XsdToMarkDownTests
         {
             var folder = TestData.Get(@"TestData");
             var document = XDocument.Load(Path.Combine(folder, "wix.xsd"));
-            var xsd = new Xsd(document);
+            var xsd = new Xsd(document, "wix.xsd");
 
             Assert.True(xsd.IsMainSchema);
             Assert.Equal("Wxs", xsd.SchemaName);
             Assert.Equal("http://wixtoolset.org/schemas/v4/wxs", xsd.TargetNamespace);
-            Assert.Equal(28, xsd.SimpleTypes.Count());
+            Assert.Equal(33, xsd.SimpleTypes.Count);
             Assert.Empty(xsd.RootAttributes);
-            Assert.Single(xsd.AttributeGroups);
+            Assert.Equal(5, xsd.AttributeGroups.Count);
 
-            Assert.Equal(271, xsd.Elements.Count);
+            Assert.Equal(293, xsd.Elements.Count);
 
             var componentElement = xsd.Elements["Component"];
-            Assert.Equal(17, componentElement.Attributes.Count);
+            Assert.Equal(19, componentElement.Attributes.Count);
             Assert.Equal(31, componentElement.Children.Count);
             Assert.Equal(3, componentElement.MsiRefs.Count());
             Assert.Equal("Component", componentElement.Name);
             Assert.Equal("http://wixtoolset.org/schemas/v4/wxs", componentElement.Namespace);
             Assert.Empty(componentElement.Parents);
-            Assert.Equal(2, componentElement.SeeAlsos.Count());
+            Assert.Single(componentElement.SeeAlsos);
+        }
+
+        [Fact]
+        public void ExtensionAttributesOnMainElementsWork()
+        {
+            var folder = TestData.Get(@"TestData");
+            var document = XDocument.Load(Path.Combine(folder, "bal.xsd"));
+            var xsd = new Xsd(document, "bal.xsd");
+
+            Assert.False(xsd.IsMainSchema);
+            Assert.Equal("Bal", xsd.SchemaName);
+            Assert.Equal("http://wixtoolset.org/schemas/v4/wxs/bal", xsd.TargetNamespace);
+            Assert.Equal(9, xsd.RootAttributes.Count);
+
+            Assert.Equal(new[] {
+                "BAFactoryAssembly",
+                "BAFunctions",
+                "CommandLineVariables",
+                "DisplayInternalUICondition",
+                "Overridable",
+                "PrereqLicenseFile",
+                "PrereqLicenseUrl",
+                "PrereqPackage",
+                "PrimaryPackageType",
+            }, xsd.RootAttributes.Values.Select(a => a.Name));
+
+            var xDisplayInternalUICondition = xsd.RootAttributes["DisplayInternalUICondition"];
+            Assert.Equal("http://wixtoolset.org/schemas/v4/wxs/bal", xDisplayInternalUICondition.Namespace);
+            Assert.Equal(new[] {
+                "MsiPackage",
+                "MspPackage",
+            }, xDisplayInternalUICondition.Parents.Select(p => p.Name));
         }
 
         [Fact]
@@ -116,19 +148,19 @@ namespace XsdToMarkDownTests
             Assert.True(xsd.IsMainSchema);
             Assert.Equal("Wxs", xsd.SchemaName);
             Assert.Equal("http://wixtoolset.org/schemas/v4/wxs", xsd.TargetNamespace);
-            Assert.Equal(28, xsd.SimpleTypes.Count());
+            Assert.Equal(33, xsd.SimpleTypes.Count());
             Assert.Empty(xsd.RootAttributes);
-            Assert.Single(xsd.AttributeGroups);
+            Assert.Equal(5, xsd.AttributeGroups.Count);
 
-            Assert.Equal(271, xsd.Elements.Count);
+            Assert.Equal(293, xsd.Elements.Count);
 
             var componentElement = xsd.Elements["Component"];
-            Assert.Equal(17, componentElement.Attributes.Count);
+            Assert.Equal(19, componentElement.Attributes.Count);
             Assert.Equal(41, componentElement.Children.Count);
             Assert.Equal(3, componentElement.MsiRefs.Count());
             Assert.Equal("Component", componentElement.Name);
             Assert.Equal("http://wixtoolset.org/schemas/v4/wxs", componentElement.Namespace);
-            Assert.Equal(2, componentElement.SeeAlsos.Count());
+            Assert.Single(componentElement.SeeAlsos);
             Assert.Equal(new[]
             {
                 "ComponentGroup",
@@ -139,8 +171,22 @@ namespace XsdToMarkDownTests
                 "FeatureRef",
                 "Fragment",
                 "Module",
-                "Product",
+                "Package",
+                "StandardDirectory",
             }, componentElement.Parents.Values.Select(p => p.Name).OrderBy(p => p));
+
+            var msiPackageElement = xsd.Elements["MsiPackage"];
+            Assert.Equal(new[]
+            {
+                "DisplayInternalUICondition/http://wixtoolset.org/schemas/v4/wxs/bal",
+                "PrereqLicenseFile/http://wixtoolset.org/schemas/v4/wxs/bal",
+                "PrereqLicenseUrl/http://wixtoolset.org/schemas/v4/wxs/bal",
+                "PrereqPackage/http://wixtoolset.org/schemas/v4/wxs/bal",
+                "PrimaryPackageType/http://wixtoolset.org/schemas/v4/wxs/bal",
+            }, msiPackageElement.Attributes.Values
+                .Where(a => a.Namespace != "http://wixtoolset.org/schemas/v4/wxs")
+                .Select(a => $"{a.Name}/{a.Namespace}")
+                .OrderBy(a => a));
         }
 
         private static IEnumerable<Xsd> GetFinalizedXsds()
@@ -153,7 +199,7 @@ namespace XsdToMarkDownTests
                 Path.Combine(folder, "util.xsd"),
             };
 
-            var xsds = paths.Select(path => new Xsd(XDocument.Load(path))).ToList();
+            var xsds = paths.Select(path => new Xsd(XDocument.Load(path), path)).ToList();
             return XsdFinalizer.Finalize(xsds);
         }
     }
